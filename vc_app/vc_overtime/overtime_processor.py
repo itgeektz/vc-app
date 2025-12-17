@@ -13,7 +13,7 @@ from vc_app.vc_overtime.overtime_calculator import (
     get_shift_details,
     get_overtime_multiplier
 )
-
+import random 
 # =====================================================================
 # MAIN PROCESSING FUNCTION
 # =====================================================================
@@ -197,14 +197,22 @@ def reject_overtime(attendance_name, att_data):
     
     # Step 1: Add 8 hours (standard work hours)
     reset_time = add_to_date(in_time, hours=8)
-    
+        
     # Step 2: Add overtime allowance minutes
-    reset_time = add_to_date(reset_time, minutes=shift_details['overtime_allowance_minutes'])
+    allowance_minutes = shift_details['overtime_allowance_minutes']
+    random_minutes = random.randint(0, allowance_minutes) if allowance_minutes > 0 else 0
+    reset_time = add_to_date(reset_time, minutes=random_minutes)
     
     # Step 3: Add variance (3-4 seconds for uniqueness)
     variance_seconds = calculate_variance_seconds(att_data['employee'], att_data['attendance_date'])
     reset_time = add_to_date(reset_time, seconds=variance_seconds)
     
+    #Calculate the new worked hours after reset
+    new_worked_hours = time_diff_in_hours(reset_time, in_time)
+    if new_worked_hours < 8:
+        # Ensure at least 8 hours worked
+        reset_time = add_to_date(in_time, hours=8, minutes=random.randint(0, allowance_minutes), seconds=variance_seconds)  
+        
     # Find the most recent OUT checkin for this attendance
     out_checkin = frappe.db.sql("""
         SELECT name, time
@@ -249,6 +257,12 @@ def reject_overtime(attendance_name, att_data):
     # Calculate what the new hours would be
     new_worked_hours = time_diff_in_hours(reset_time, in_time)
     
+    frappe.db.set_value(
+        "Attendance",
+        attendance_name,
+        "working_hours",
+        flt(new_worked_hours, 2)
+    )
     frappe.msgprint(
         _("Reset checkout time for {0} to {1}<br>New worked hours: {2}<br>Allowance applied: {3} minutes").format(
             att_data['employee'],

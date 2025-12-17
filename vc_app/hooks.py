@@ -15,11 +15,14 @@ doc_events = {
     
     "Salary Structure Assignment": {
         "validate": "vc_app.vc_overtime.overtime_calculator.calculate_hourly_rate_on_save"
+    },
+    "Salary Slip": {
+        "before_save": "vc_app.vc_overtime.doctype_hooks.salary_slip.before_save",
     }
 }
 
 # Installation
-after_install = "vc_app.install.after_install"
+after_install = "vc_app.vc_overtime.install.after_install"
 
 # Fixtures for custom fields
 fixtures = [
@@ -27,7 +30,7 @@ fixtures = [
         "dt": "Custom Field",
         "filters": [
             ["name", "in", [
-                # HR Settings
+                # ===== HR SETTINGS =====
                 "HR Settings-overtime_section",
                 "HR Settings-enable_overtime_tracking",
                 "HR Settings-standard_hours_per_month",
@@ -39,62 +42,81 @@ fixtures = [
                 "HR Settings-weekday_overtime_component",
                 "HR Settings-holiday_overtime_component",
                 
-                # Employee
+                # ===== EMPLOYEE =====
                 "Employee-overtime_settings_section",
                 "Employee-eligible_for_overtime",
                 "Employee-overtime_notes",
                 
-                # Salary Structure Assignment
+                # ===== SALARY STRUCTURE ASSIGNMENT =====
                 "Salary Structure Assignment-hourly_rate_section",
                 "Salary Structure Assignment-hourly_rate",
                 "Salary Structure Assignment-calculate_hourly_rate",
                 
-                # Employee Checkin
+                # ===== EMPLOYEE CHECKIN =====
                 "Employee Checkin-original_time",
                 "Employee Checkin-is_overtime_processed",
                 "Employee Checkin-overtime_reset_reason",
                 
-                # Attendance
-                "Attendance-overtime_additional_salary",
-                "Attendance-overtime_type",
+                # ===== ATTENDANCE =====
                 "Attendance-overtime_tracking_section",
+                "Attendance-calculated_overtime_hours",
+                "Attendance-column_break_ot1",
+                "Attendance-overtime_type",
                 "Attendance-column_break_ot2",
+                "Attendance-is_overtime_approved",
+                "Attendance-overtime_additional_salary",
+                "Attendance-audit_section",
                 "Attendance-reset_close_time",
                 "Attendance-effective_out_time",
-                "Attendance-audit_section",
-                "Attendance-column_break_ot1",
-                "Attendance-overtime_additional_salary",
-                "Attendance-overtime_type",
-                "Attendance-overtime_tracking_section",
-                "Attendance-column_break_ot2",
-                "Attendance-reset_close_time",
-                "Attendance-effective_out_time",
-                "Attendance-audit_section",
-                "Attendance-column_break_ot1",
-
                 
-                # Additional Salary
+                # ===== ADDITIONAL SALARY =====
+                "Additional Salary-overtime_details_section",
                 "Additional Salary-is_overtime_salary",
                 "Additional Salary-overtime_attendance",
                 "Additional Salary-overtime_hours",
+                "Additional Salary-actual_worked_hours",
+                "Additional Salary-overtime_column_break",
                 "Additional Salary-overtime_type",
-                "Additional Salary-overtime_details_section",
-
-                #Shift Type
-                "Shift Type-overtime_reset_info",
+                "Additional Salary-overtime_calculation_method",
+                "Additional Salary-comp_off_section",
+                "Additional Salary-comp_off_granted",
+                "Additional Salary-comp_off_days",
+                "Additional Salary-comp_off_column_break",
+                "Additional Salary-comp_off_leave_allocation",
+                "Additional Salary-comp_off_leave_type",
+                
+                # ===== SHIFT TYPE (New Holiday/Sunday policies) =====
+                "Shift Type-overtime_section",
+                "Shift Type-overtime_allowance_minutes",
                 "Shift Type-overtime_column_break",
                 "Shift Type-overtime_calculation_info",
-                "Shift Type-overtime_allowance_minutes",
-                "Shift Type-overtime_section",
-
-                #Salary Component
-
-                "Salary Component-overtime_multiplier_holiday",
-                "Salary Component-overtime_multiplier_weekday",
-                "Salary Component-is_overtime_component",
+                "Shift Type-overtime_reset_info",
+                "Shift Type-holiday_overtime_section",
+                "Shift Type-holiday_overtime_calculation_type",
+                "Shift Type-holiday_comp_off_leave_type",
+                "Shift Type-holiday_min_hours_for_comp_off",
+                "Shift Type-holiday_column_break",
+                "Shift Type-holiday_policy_info",
+                "Shift Type-sunday_overtime_section",
+                "Shift Type-sunday_overtime_calculation_type",
+                "Shift Type-sunday_comp_off_leave_type",
+                "Shift Type-sunday_min_hours_for_comp_off",
+                "Shift Type-sunday_column_break",
+                "Shift Type-sunday_policy_info",
+                
+                # ===== LEAVE ALLOCATION (New Comp Off tracking) =====
+                "Leave Allocation-overtime_comp_off_section",
+                "Leave Allocation-is_overtime_comp_off",
+                "Leave Allocation-overtime_additional_salary",
+                "Leave Allocation-overtime_column_break",
+                "Leave Allocation-overtime_work_date",
+                "Leave Allocation-overtime_type",
+                
+                # ===== SALARY COMPONENT =====
                 "Salary Component-overtime_component_section",
-
-
+                "Salary Component-is_overtime_component",
+                "Salary Component-overtime_multiplier_weekday",
+                "Salary Component-overtime_multiplier_holiday",
             ]]
         ]
     }
