@@ -1,6 +1,6 @@
 # =====================================================================
 # FILE: vc_app/vc_overtime/overtime_processor.py
-# Updated to use shift overtime allowance for time reset
+# UPDATED: Now handles approved_overtime_hours from frontend
 # =====================================================================
 
 import frappe
@@ -14,6 +14,7 @@ from vc_app.vc_overtime.overtime_calculator import (
     get_overtime_multiplier
 )
 import random 
+
 # =====================================================================
 # MAIN PROCESSING FUNCTION
 # =====================================================================
@@ -24,7 +25,9 @@ def process_selected_overtime(attendance_list, action="approve"):
     Process selected overtime records.
     
     Args:
-        attendance_list: JSON string or list of attendance IDs
+        attendance_list: JSON string or list - can be:
+            - Simple list: ["ATT-001", "ATT-002"]
+            - Dictionary list: [{"attendance": "ATT-001", "approved_overtime_hours": 2.5, "has_custom_hours": True}, ...]
         action: "approve" or "reject"
     
     Returns:
@@ -46,8 +49,19 @@ def process_selected_overtime(attendance_list, action="approve"):
         "errors": []
     }
     
-    for att_name in attendance_list:
+    for item in attendance_list:
         try:
+            # Handle both old format (string) and new format (dict)
+            if isinstance(item, dict):
+                att_name = item.get('attendance')
+                approved_hours = flt(item.get('approved_overtime_hours', 0))
+                has_custom_hours = item.get('has_custom_hours', False)
+            else:
+                # Old format - simple string
+                att_name = item
+                approved_hours = 0  # Will be calculated
+                has_custom_hours = False
+            
             # Get attendance data
             att_data = frappe.db.get_value("Attendance", att_name, 
                 ["employee", "attendance_date", "in_time", "out_time", "company"], 
@@ -64,19 +78,19 @@ def process_selected_overtime(attendance_list, action="approve"):
             
             if action == "approve":
                 # Approve and create Additional Salary
-                approve_overtime(att_name, att_data)
+                approve_overtime(att_name, att_data, approved_hours, has_custom_hours)
                 results["approved"] += 1
                 results["processed"] += 1
             elif action == "reject":
                 # Reject and reset time
-                reject_overtime(att_name, att_data)
+                reject_overtime(att_name, att_data, approved_hours, has_custom_hours)
                 results["rejected"] += 1
                 results["processed"] += 1
             else:
                 results["errors"].append(f"{att_name}: Invalid action '{action}'")
             
         except Exception as e:
-            error_msg = f"{att_name}: {str(e)}"
+            error_msg = f"{att_name if 'att_name' in locals() else 'Unknown'}: {str(e)}"
             results["errors"].append(error_msg)
             frappe.log_error(error_msg, "Overtime Processing Error")
     
@@ -89,9 +103,15 @@ def process_selected_overtime(attendance_list, action="approve"):
 # APPROVE OVERTIME
 # =====================================================================
 
-def approve_overtime(attendance_name, att_data):
+def approve_overtime(attendance_name, att_data, approved_hours=0, has_custom_hours=False):
     """
     Approve overtime and create Additional Salary.
+    
+    Args:
+        attendance_name: Attendance document name
+        att_data: Attendance data dict
+        approved_hours: Manually approved hours (0 = use calculated)
+        has_custom_hours: Whether hours were manually edited
     """
     # Check eligibility
     is_eligible = frappe.db.get_value("Employee", att_data['employee'], "eligible_for_overtime")
@@ -105,12 +125,28 @@ def approve_overtime(attendance_name, att_data):
     if not ot_calc.get('is_eligible'):
         frappe.throw(_("Employee {0} is not eligible for overtime").format(att_data['employee']))
     
-    if ot_calc['overtime_hours'] <= 0:
-        frappe.throw(_("No overtime hours calculated. Allowance: {0} minutes, worked hours below threshold").format(
+    # Use approved hours if provided, otherwise use calculated
+    if has_custom_hours and approved_hours > 0:
+        final_hours = approved_hours
+        frappe.msgprint(
+            _("Using manually approved hours: {0} (calculated: {1})").format(
+                final_hours, ot_calc['overtime_hours']
+            ),
+            alert=True,
+            indicator="blue"
+        )
+    else:
+        final_hours = ot_calc['overtime_hours']
+    
+    if final_hours <= 0:
+        frappe.throw(_("No overtime hours to approve. Allowance: {0} minutes").format(
             ot_calc['allowance_minutes']
         ))
     
-    if ot_calc['overtime_amount'] <= 0:
+    # Calculate amount based on final hours
+    final_amount = flt(final_hours * ot_calc['hourly_rate'] * ot_calc['overtime_multiplier'], 2)
+    
+    if final_amount <= 0:
         frappe.throw(_("No overtime amount calculated for this attendance"))
     
     # Check if already approved
@@ -144,7 +180,7 @@ def approve_overtime(attendance_name, att_data):
     add_sal.employee = att_data['employee']
     add_sal.company = att_data['company']
     add_sal.salary_component = component
-    add_sal.amount = ot_calc['overtime_amount']
+    add_sal.amount = final_amount
     add_sal.payroll_date = att_data['attendance_date']
     add_sal.overwrite_salary_structure_amount = 0
     
@@ -152,21 +188,27 @@ def approve_overtime(attendance_name, att_data):
     if hasattr(add_sal, 'is_overtime_salary'):
         add_sal.is_overtime_salary = 1
     if hasattr(add_sal, 'overtime_hours'):
-        add_sal.overtime_hours = ot_calc['overtime_hours']
+        add_sal.overtime_hours = final_hours
     if hasattr(add_sal, 'overtime_type'):
         add_sal.overtime_type = ot_calc['overtime_type']
+    if hasattr(add_sal, 'overtime_attendance'):
+        add_sal.overtime_attendance = attendance_name
     
     # Save and submit
     add_sal.insert(ignore_permissions=True)
     add_sal.submit()
     
+    # If custom hours used, also reset the checkout time to match
+    if has_custom_hours and approved_hours > 0:
+        reset_time_to_approved_hours(attendance_name, att_data, approved_hours, ot_calc)
+    
     frappe.msgprint(
-        _("Created Additional Salary {0} for {1}: KES {2} ({3} OT hours after {4} min allowance)").format(
+        _("Created Additional Salary {0} for {1}: KES {2} ({3} OT hours{4})").format(
             add_sal.name,
             att_data['employee'],
-            frappe.format_value(ot_calc['overtime_amount'], {"fieldtype": "Currency"}),
-            ot_calc['overtime_hours'],
-            ot_calc['allowance_minutes']
+            frappe.format_value(final_amount, {"fieldtype": "Currency"}),
+            final_hours,
+            " - custom approved" if has_custom_hours else ""
         ),
         alert=True
     )
@@ -176,10 +218,16 @@ def approve_overtime(attendance_name, att_data):
 # REJECT OVERTIME
 # =====================================================================
 
-def reject_overtime(attendance_name, att_data):
+def reject_overtime(attendance_name, att_data, approved_hours=0, has_custom_hours=False):
     """
     Reject overtime and reset checkout time.
-    Now resets to: in_time + 8 hours + overtime_allowance_minutes + variance
+    Now uses approved_hours if provided for reset calculation.
+    
+    Args:
+        attendance_name: Attendance document name
+        att_data: Attendance data dict
+        approved_hours: Hours to reset to (0 = standard reset)
+        has_custom_hours: Whether to use approved hours for reset
     """
     # Get shift details including allowance
     shift_details = get_shift_details(att_data['employee'], att_data['attendance_date'])
@@ -192,27 +240,45 @@ def reject_overtime(attendance_name, att_data):
     # Get in_time
     in_time = get_datetime(att_data['in_time'])
     
-    # Calculate reset time:
-    # reset_time = in_time + 8 hours + overtime_allowance_minutes + variance (3-4 sec)
-    
-    # Step 1: Add 8 hours (standard work hours)
-    reset_time = add_to_date(in_time, hours=8)
+    # Calculate reset time based on approved hours or standard
+    if has_custom_hours and approved_hours > 0:
+        # Use approved hours: in_time + 8 hrs + approved_hrs + allowance + variance
+        reset_time = add_to_date(in_time, hours=8)
+        reset_time = add_to_date(reset_time, hours=approved_hours)
         
-    # Step 2: Add overtime allowance minutes
-    allowance_minutes = shift_details['overtime_allowance_minutes']
-    random_minutes = random.randint(0, allowance_minutes) if allowance_minutes > 0 else 0
-    reset_time = add_to_date(reset_time, minutes=random_minutes)
+        # Add allowance
+        allowance_minutes = shift_details['overtime_allowance_minutes']
+        random_minutes = random.randint(0, allowance_minutes) if allowance_minutes > 0 else 0
+        reset_time = add_to_date(reset_time, minutes=random_minutes)
+        
+        # Add ±5 minutes variance for custom hours
+        variance_minutes = random.randint(-5, 5)
+        reset_time = add_to_date(reset_time, minutes=variance_minutes)
+        
+        reset_type = f"approved {approved_hours} hrs"
+    else:
+        # Standard reset: in_time + 8 hours + allowance + 3-4 sec variance
+        reset_time = add_to_date(in_time, hours=8)
+        
+        # Add random portion of allowance
+        allowance_minutes = shift_details['overtime_allowance_minutes']
+        random_minutes = random.randint(0, allowance_minutes) if allowance_minutes > 0 else 0
+        reset_time = add_to_date(reset_time, minutes=random_minutes)
+        
+        # Add 3-4 second variance
+        variance_seconds = calculate_variance_seconds(att_data['employee'], att_data['attendance_date'])
+        reset_time = add_to_date(reset_time, seconds=variance_seconds)
+        
+        reset_type = "standard (no OT)"
     
-    # Step 3: Add variance (3-4 seconds for uniqueness)
-    variance_seconds = calculate_variance_seconds(att_data['employee'], att_data['attendance_date'])
-    reset_time = add_to_date(reset_time, seconds=variance_seconds)
-    
-    #Calculate the new worked hours after reset
+    # Calculate the new worked hours after reset
     new_worked_hours = time_diff_in_hours(reset_time, in_time)
+    
+    # Ensure at least 8 hours worked
     if new_worked_hours < 8:
-        # Ensure at least 8 hours worked
-        reset_time = add_to_date(in_time, hours=8, minutes=random.randint(0, allowance_minutes), seconds=variance_seconds)  
-        
+        reset_time = add_to_date(in_time, hours=8, seconds=variance_seconds if not has_custom_hours else 0)
+        new_worked_hours = 8.0
+    
     # Find the most recent OUT checkin for this attendance
     out_checkin = frappe.db.sql("""
         SELECT name, time
@@ -254,23 +320,94 @@ def reject_overtime(attendance_name, att_data):
         reset_time
     )
     
-    # Calculate what the new hours would be
-    new_worked_hours = time_diff_in_hours(reset_time, in_time)
-    
+    # Update working hours
     frappe.db.set_value(
         "Attendance",
         attendance_name,
         "working_hours",
         flt(new_worked_hours, 2)
     )
+    
     frappe.msgprint(
-        _("Reset checkout time for {0} to {1}<br>New worked hours: {2}<br>Allowance applied: {3} minutes").format(
+        _("Reset checkout time for {0} to {1}<br>New worked hours: {2}<br>Reset type: {3}").format(
             att_data['employee'],
             reset_time.strftime("%Y-%m-%d %H:%M:%S"),
             flt(new_worked_hours, 2),
-            shift_details['overtime_allowance_minutes']
+            reset_type
         ),
         alert=True
+    )
+
+
+def reset_time_to_approved_hours(attendance_name, att_data, approved_hours, ot_calc):
+    """
+    Reset checkout time to match approved hours (used when approving with custom hours).
+    Formula: in_time + 8 hrs + approved_hrs + allowance ± 5 min
+    """
+    # Get shift details
+    shift_details = get_shift_details(att_data['employee'], att_data['attendance_date'])
+    
+    if not shift_details:
+        return
+    
+    # Get in_time
+    in_time = get_datetime(att_data['in_time'])
+    
+    # Calculate new checkout time
+    # Base: in_time + 8 hours (standard work day)
+    new_out_time = add_to_date(in_time, hours=8)
+    
+    # Add approved overtime hours
+    new_out_time = add_to_date(new_out_time, hours=approved_hours)
+    
+    # Add allowance
+    allowance_minutes = shift_details['overtime_allowance_minutes']
+    random_minutes = random.randint(0, allowance_minutes) if allowance_minutes > 0 else 0
+    new_out_time = add_to_date(new_out_time, minutes=random_minutes)
+    
+    # Add ±5 minutes variance
+    variance_minutes = random.randint(-5, 5)
+    new_out_time = add_to_date(new_out_time, minutes=variance_minutes)
+    
+    # Update Employee Checkin
+    out_checkin = frappe.db.sql("""
+        SELECT name
+        FROM `tabEmployee Checkin`
+        WHERE employee = %s
+            AND attendance = %s
+            AND log_type = 'OUT'
+        ORDER BY time DESC
+        LIMIT 1
+    """, (att_data['employee'], attendance_name), as_dict=True)
+    
+    if out_checkin:
+        frappe.db.set_value(
+            "Employee Checkin",
+            out_checkin[0].name,
+            {
+                "time": new_out_time,
+                "skip_auto_attendance": 1
+            }
+        )
+    
+    # Update Attendance
+    new_worked_hours = time_diff_in_hours(new_out_time, in_time)
+    frappe.db.set_value(
+        "Attendance",
+        attendance_name,
+        {
+            "out_time": new_out_time,
+            "working_hours": flt(new_worked_hours, 2)
+        }
+    )
+    
+    frappe.msgprint(
+        _("Adjusted checkout time to match approved hours:<br>New out time: {0}<br>Total hours: {1}").format(
+            new_out_time.strftime("%Y-%m-%d %H:%M:%S"),
+            flt(new_worked_hours, 2)
+        ),
+        alert=True,
+        indicator="blue"
     )
 
 

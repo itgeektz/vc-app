@@ -9,7 +9,7 @@ def execute(filters=None):
     return columns, data
 
 def get_columns():
-    """Define report columns with checkbox as first column"""
+    """Define report columns with checkbox as first column and editable approved hours"""
     return [
         {
             "label": _("Select"),
@@ -56,11 +56,19 @@ def get_columns():
             "width": 150
         },
         {
-            "label": _("OT Hours"),
+            "label": _("Calculated OT Hours"),
             "fieldname": "overtime_hours",
             "fieldtype": "Float",
             "width": 90,
             "precision": 2
+        },
+        {
+            "label": _("Approved OT Hours"),
+            "fieldname": "approved_overtime_hours",
+            "fieldtype": "Float",
+            "width": 110,
+            "precision": 2,
+            "editable": 1  # Make this column editable
         },
         {
             "label": _("OT Type"),
@@ -87,8 +95,14 @@ def get_columns():
             "width": 110
         },
         {
-            "label": _("OT Amount"),
+            "label": _("Calculated OT Amount"),
             "fieldname": "overtime_amount",
+            "fieldtype": "Currency",
+            "width": 120
+        },
+        {
+            "label": _("Approved OT Amount"),
+            "fieldname": "approved_overtime_amount",
             "fieldtype": "Currency",
             "width": 120
         },
@@ -145,6 +159,15 @@ def get_data(filters):
         row['overtime_multiplier'] = ot_calc['overtime_multiplier']
         row['overtime_amount'] = ot_calc['overtime_amount']
         row['ot_rate'] = flt(ot_calc['hourly_rate'] * ot_calc['overtime_multiplier'], 2)
+        
+        # Initialize approved hours - default to calculated hours
+        row['approved_overtime_hours'] = ot_calc['overtime_hours']
+        
+        # Calculate approved amount based on approved hours
+        row['approved_overtime_amount'] = flt(
+            row['approved_overtime_hours'] * row['hourly_rate'] * ot_calc['overtime_multiplier'], 
+            2
+        )
         
         # Check if already processed (Additional Salary exists)
         additional_salary = frappe.db.exists("Additional Salary", {
