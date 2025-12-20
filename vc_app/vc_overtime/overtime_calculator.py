@@ -279,44 +279,91 @@ def get_overtime_multiplier(overtime_type):
             "HR Settings", "weekday_overtime_multiplier"
         ) or 1.5, 2)
     
-@frappe.whitelist()    
-def get_current_hourly_rate(employee, date):
+
+def calculate_hourly_rate_on_save(doc, method=None):
     """
-    Get employee's hourly rate on a specific date.
+    AUTOMATIC CALCULATION: Triggered when Salary Structure Assignment is saved.
     
     PURPOSE:
-    Get the correct hourly rate considering salary changes over time.
+    Calculate and store hourly rate based on basic salary and standard hours.
+    
+    FORMULA:
+    Hourly Rate = Basic Salary / Standard Hours per Month
+    
+    EXAMPLE:
+    - Basic Salary: KES 52,000
+    - Standard Hours: 225 (from HR Settings)
+    - Hourly Rate: 52,000 / 225 = KES 231.11
     
     PARAMETERS:
-    - employee: Employee ID
-    - date: Date to check (for historical rates)
+    - doc: The Salary Structure Assignment document being saved
+    - method: Hook method name (not used, but required by Frappe hooks)
     
-    RETURNS:
-    - float: Hourly rate in KES
+    PROCESS:
+    1. Check if basic salary (base) exists and is positive
+    2. Get standard hours from HR Settings (default: 225)
+    3. Calculate: base / standard_hours
+    4. Round to 2 decimal places using flt()
+    5. Set the hourly_rate field
     
-    LOGIC:
-    Gets the salary assignment active on the specified date,
-    in case employee had salary changes.
+    NOTE: This runs AUTOMATICALLY every time salary is saved/updated
     """
-    ssa = frappe.db.sql("""
-        SELECT hourly_rate, base
-        FROM `tabSalary Structure Assignment`
-        WHERE employee = %s
-            AND from_date <= %s
-            AND (to_date IS NULL OR to_date >= %s)
-            AND docstatus = 1
-        ORDER BY from_date DESC
-        LIMIT 1
-    """, (employee, date, date), as_dict=True)
+    # Safety check: Don't calculate if no base salary
+    if not doc.base or doc.base <= 0:
+        return  # Exit function early
     
-    if not ssa:
-        frappe.throw(_("No active salary structure assignment found for {0}").format(employee))
+    # Get standard hours from HR Settings (configured during installation)
+    # If not set, default to 225 (Kenya standard)
+    standard_hours = frappe.db.get_single_value(
+        "HR Settings",  # Single DocType (only one record exists)
+        "standard_hours_per_month"  # Field name
+    ) or 225  # Default value if not configured
     
-    # If hourly rate not calculated, calculate it now
-    if not ssa[0].hourly_rate and ssa[0].base:
-        standard_hours = frappe.db.get_single_value(
-            "HR Settings", "standard_hours_per_month"
-        ) or 225
-        return flt(ssa[0].base / standard_hours, 2)
+    # Calculate hourly rate
+    # flt() ensures proper decimal handling and rounds to 2 places
+    hourly_rate = flt(doc.base / standard_hours, 2)
     
-    return flt(ssa[0].hourly_rate, 2)
+    # Set the calculated value to the document
+    # This will be saved automatically with the document
+    doc.hourly_rate = hourly_rate
+
+
+@frappe.whitelist()
+def calculate_hourly_rate(salary_structure_assignment):
+    """
+    MANUAL CALCULATION: Called when user clicks "Calculate Hourly Rate" button.
+    
+    PURPOSE:
+    Allow HR to manually recalculate hourly rate after changing salary.
+    
+    PARAMETERS:
+    - salary_structure_assignment: Document name (ID) of the salary assignment
+    
+    PROCESS:
+    1. Load the full document from database
+    2. Call the automatic calculation function
+    3. Save the document (persists the hourly rate)
+    4. Show success message to user
+    
+    WHEN USED:
+    - When HR updates salary mid-month
+    - When fixing incorrect hourly rates
+    - When standard hours change in HR Settings
+    
+    HOW TO CALL FROM UI:
+    This is linked to a button in Salary Structure Assignment form.
+    The @frappe.whitelist() decorator makes it callable from browser.
+    """
+    # Load the full document from database
+    doc = frappe.get_doc("Salary Structure Assignment", salary_structure_assignment)
+    
+    # Calculate hourly rate using the same logic
+    calculate_hourly_rate_on_save(doc, None)
+    
+    # Save the document to persist changes
+    doc.save()
+    
+    # Show success message to user
+    # _() is translation function for multi-language support
+    frappe.msgprint(_("Hourly rate calculated: {0}").format(doc.hourly_rate))
+
