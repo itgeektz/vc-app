@@ -278,3 +278,45 @@ def get_overtime_multiplier(overtime_type):
         return flt(frappe.db.get_single_value(
             "HR Settings", "weekday_overtime_multiplier"
         ) or 1.5, 2)
+    
+@frappe.whitelist()    
+def get_current_hourly_rate(employee, date):
+    """
+    Get employee's hourly rate on a specific date.
+    
+    PURPOSE:
+    Get the correct hourly rate considering salary changes over time.
+    
+    PARAMETERS:
+    - employee: Employee ID
+    - date: Date to check (for historical rates)
+    
+    RETURNS:
+    - float: Hourly rate in KES
+    
+    LOGIC:
+    Gets the salary assignment active on the specified date,
+    in case employee had salary changes.
+    """
+    ssa = frappe.db.sql("""
+        SELECT hourly_rate, base
+        FROM `tabSalary Structure Assignment`
+        WHERE employee = %s
+            AND from_date <= %s
+            AND (to_date IS NULL OR to_date >= %s)
+            AND docstatus = 1
+        ORDER BY from_date DESC
+        LIMIT 1
+    """, (employee, date, date), as_dict=True)
+    
+    if not ssa:
+        frappe.throw(_("No active salary structure assignment found for {0}").format(employee))
+    
+    # If hourly rate not calculated, calculate it now
+    if not ssa[0].hourly_rate and ssa[0].base:
+        standard_hours = frappe.db.get_single_value(
+            "HR Settings", "standard_hours_per_month"
+        ) or 225
+        return flt(ssa[0].base / standard_hours, 2)
+    
+    return flt(ssa[0].hourly_rate, 2)
