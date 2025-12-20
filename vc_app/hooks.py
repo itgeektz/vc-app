@@ -22,7 +22,7 @@ doc_events = {
 }
 
 # Installation
-after_install = "vc_app.vc_overtime.install.after_install"
+after_install = "vc_app.install.after_install"
 
 # Fixtures for custom fields
 fixtures = [
